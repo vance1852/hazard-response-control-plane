@@ -1,0 +1,3 @@
+package hazard
+var sharedBatchObservation Observation
+func observationBatchPointer(observation Observation)*Observation{sharedBatchObservation=observation;return &sharedBatchObservation}
