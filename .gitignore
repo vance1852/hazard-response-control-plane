@@ -1,0 +1,9 @@
+hazardd
+*.db
+*.db-shm
+*.db-wal
+.env
+coverage.out
+dist/
+.idea/
+.vscode/
