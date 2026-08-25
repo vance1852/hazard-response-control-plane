@@ -24,6 +24,50 @@ func (validationRepo) InsertObservation(context.Context, Observation) (Observati
 func (validationRepo) FindObservationBySequence(context.Context, string, string) (Observation, error) {
 	return Observation{}, nil
 }
+
+// batchRepo records each observation with a distinct sensor ID and value so
+// the batch results can be checked for ownership of the matching command.
+type batchRepo struct{ validationRepo }
+
+func (batchRepo) FindSensor(_ context.Context, id string) (Sensor, error) {
+	return Sensor{ID: id, RegionID: "r", Active: true}, nil
+}
+func (batchRepo) InsertObservation(_ context.Context, observation Observation) (Observation, bool, error) {
+	observation.ID = "obs-" + observation.SensorID
+	return observation, false, nil
+}
+
+func TestIngestObservationBatchKeepsEachObservation(t *testing.T) {
+	now := time.Now()
+	svc, _ := NewService(batchRepo{}, clock.NewManual(now))
+	actor := identity.Actor{UserID: "u", Role: identity.RoleFieldOperator}
+	commands := []ObservationCommand{
+		{SensorID: "sensor-a", SourceSequence: "a-1", ObservedAt: now.Add(-time.Minute), Metric: "rainfall", Value: 1.5, Unit: "mm", Quality: QualityVerified, Payload: map[string]any{"src": "a"}},
+		{SensorID: "sensor-b", SourceSequence: "b-1", ObservedAt: now.Add(-time.Minute), Metric: "rainfall", Value: 9.9, Unit: "mm", Quality: QualityVerified, Payload: map[string]any{"src": "b"}},
+	}
+
+	results := svc.IngestObservationBatch(context.Background(), actor, commands)
+	if len(results) != len(commands) {
+		t.Fatalf("result count = %d, want %d", len(results), len(commands))
+	}
+	for i, r := range results {
+		if r.ErrorCode != "" {
+			t.Fatalf("result %d errored: %s", i, r.Message)
+		}
+		if r.Observation == nil {
+			t.Fatalf("result %d missing observation", i)
+		}
+		if got := r.Observation.SensorID; got != commands[i].SensorID {
+			t.Fatalf("result %d sensor = %q, want %q", i, got, commands[i].SensorID)
+		}
+		if got := r.Observation.Value; got != commands[i].Value {
+			t.Fatalf("result %d value = %v, want %v", i, got, commands[i].Value)
+		}
+	}
+	if results[0].Observation.SensorID == results[1].Observation.SensorID {
+		t.Fatalf("both results alias the same observation %q", results[0].Observation.SensorID)
+	}
+}
 func (validationRepo) ActivateIncident(context.Context, ActivationRecord) (Incident, []Zone, error) {
 	return Incident{}, nil, nil
 }
