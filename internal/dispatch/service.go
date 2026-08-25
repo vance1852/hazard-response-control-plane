@@ -178,8 +178,11 @@ func (s *Service) Allocate(ctx context.Context, actor identity.Actor, requestID 
 	if !request.NeededBy.After(now) {
 		return Request{}, Deployment{}, Unit{}, apperr.Conflict("need_time_passed", "resource request needed-by time has passed")
 	}
+	if err := ctx.Err(); err != nil {
+		return Request{}, Deployment{}, Unit{}, apperr.Wrap(err, "allocate field unit")
+	}
 	event, _ := audit.New(actor.UserID, "resource.allocate", "resource_request", requestID, audit.RequestID(ctx), audit.OutcomeSucceeded, map[string]any{"unit_id": unitID}, now)
-	updated, deployment, assigned, err := s.repository.AllocateUnit(allocationContext(ctx), requestID, requestVersion, unitID, unitVersion, actor.UserID, now, event)
+	updated, deployment, assigned, err := s.repository.AllocateUnit(ctx, requestID, requestVersion, unitID, unitVersion, actor.UserID, now, event)
 	if err != nil {
 		return Request{}, Deployment{}, Unit{}, apperr.Wrap(err, "allocate field unit")
 	}
