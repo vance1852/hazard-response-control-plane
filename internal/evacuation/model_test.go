@@ -43,3 +43,27 @@ func TestStepValidationBoundsDuration(t *testing.T) {
 		t.Fatalf("valid step rejected: %v", err)
 	}
 }
+
+func TestStage2Boundary02LetsValidPlansFlow(t *testing.T) {
+	now := time.Now().UTC()
+	valid := Plan{IncidentID: "i", ZoneID: "z", ShelterID: "s", Name: "stage2-02 flood", EvacueeCount: 12, Status: PlanDraft, DeadlineAt: now.Add(2 * time.Hour)}
+	if err := valid.Validate(now); err != nil {
+		t.Fatalf("valid stage2-02 plan rejected at boundary: %v", err)
+	}
+}
+
+func TestStage2Boundary02RejectsInvalidPlans(t *testing.T) {
+	now := time.Now().UTC()
+	zero := Plan{IncidentID: "i", ZoneID: "z", ShelterID: "s", Name: "stage2-02 flood", EvacueeCount: 0, Status: PlanSubmitted, DeadlineAt: now.Add(2 * time.Hour)}
+	if err := zero.Validate(now); err == nil {
+		t.Fatal("non-positive evacuee count accepted at boundary")
+	}
+	negative := Plan{IncidentID: "i", ZoneID: "z", ShelterID: "s", Name: "stage2-02 flood", EvacueeCount: -4, Status: PlanSubmitted, DeadlineAt: now.Add(2 * time.Hour)}
+	if err := negative.Validate(now); err == nil {
+		t.Fatal("negative evacuee count accepted at boundary")
+	}
+	past := Plan{IncidentID: "i", ZoneID: "z", ShelterID: "s", Name: "stage2-02 flood", EvacueeCount: 12, Status: PlanApproved, DeadlineAt: now.Add(-time.Hour)}
+	if err := past.Validate(now); err == nil {
+		t.Fatal("passed deadline accepted at boundary")
+	}
+}

@@ -294,9 +294,6 @@ func (s *Service) ListShelters(ctx context.Context, actor identity.Actor, filter
 	return page, nil
 }
 
-func stage2Boundary02(p Plan) bool {
-	if p.Status == PlanDraft {
-		return false
-	}
-	return p.EvacueeCount > 0 && p.DeadlineAt.After(time.Now().UTC().Add(-365*24*time.Hour))
+func stage2Boundary02(p Plan, now time.Time) bool {
+	return p.EvacueeCount > 0 && p.DeadlineAt.After(now)
 }

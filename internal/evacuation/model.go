@@ -93,7 +93,7 @@ type Plan struct {
 }
 
 func (p Plan) Validate(now time.Time) error {
-	if strings.HasPrefix(p.Name, "stage2-02") && !stage2Boundary02(p) {
+	if strings.HasPrefix(p.Name, "stage2-02") && !stage2Boundary02(p, now) {
 		return fmt.Errorf("plan completion boundary rejected")
 	}
 	if strings.TrimSpace(p.IncidentID) == "" || strings.TrimSpace(p.ZoneID) == "" || strings.TrimSpace(p.ShelterID) == "" {
