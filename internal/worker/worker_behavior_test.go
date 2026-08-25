@@ -73,6 +73,47 @@ func TestWorkerHandlerReceivesContextAndPayload(t *testing.T) {
 		t.Fatalf("finished=%v", repo.finished)
 	}
 }
+// TestWorkerCancellationPropagatesToHandler ensures that when the worker run
+// context is cancelled (shutdown or leadership transfer) an in-flight handler
+// observes the cancellation through its own context and exits promptly instead
+// of continuing downstream delivery. The job is left retryable and the attempt
+// is recorded so the next leader can re-attempt.
+func TestWorkerCancellationPropagatesToHandler(t *testing.T) {
+	repo := &scriptedRepository{job: Job{ID: "j", Kind: "sync", Status: "pending", Attempts: 0, MaxAttempts: 3, AvailableAt: time.Now().UTC()}}
+	w, err := New(repo, "w", time.Millisecond, 20*time.Millisecond, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, 1)
+	canceled := make(chan struct{}, 1)
+	w.Register("sync", func(ctx context.Context, _ Job) error {
+		started <- struct{}{}
+		defer close(canceled)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+			return errors.New("handler was not cancelled")
+		}
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	go w.Run(runCtx)
+	<-started
+	cancel() // simulate shutdown / leadership transfer
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not observe worker cancellation")
+	}
+	w.Stop()
+	if len(repo.finished) == 0 || repo.finished[0] != "retryable" {
+		t.Fatalf("cancelled job must stay retryable, got finished=%v", repo.finished)
+	}
+	if repo.job.Attempts == 0 {
+		t.Fatal("attempt record was not preserved")
+	}
+}
+
 func TestWorkerCancellationStopsPolling(t *testing.T) {
 	repo := &scriptedRepository{job: Job{ID: "j", Kind: "sync", Status: "pending", MaxAttempts: 1, AvailableAt: time.Now().Add(time.Hour)}}
 	w, _ := New(repo, "w", time.Millisecond, 20*time.Millisecond, 1)

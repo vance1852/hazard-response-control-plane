@@ -63,31 +63,46 @@ func (w *Worker) tick(ctx context.Context) {
 		return
 	}
 	for _, job := range jobs {
+		if ctx.Err() != nil {
+			// Worker run context was cancelled: stop dispatching new handlers.
+			// Already-running handlers observe the cancellation through their
+			// own context and exit promptly, leaving their jobs retryable.
+			break
+		}
 		w.execute(ctx, job)
 	}
 }
 func (w *Worker) execute(ctx context.Context, job Job) {
+	// Persist attempt records on a detached context so the retry trail
+	// survives even when the worker run context is cancelled mid-handler.
+	recordCtx := bookkeepingContext()
 	handler, ok := w.handlers[job.Kind]
 	if !ok {
-		_ = w.repo.Finish(ctx, job, "permanent", fmt.Errorf("no handler for %s", job.Kind), w.now())
+		_ = w.repo.Finish(recordCtx, job, "permanent", fmt.Errorf("no handler for %s", job.Kind), w.now())
 		return
 	}
-	_, _ = w.repo.RecordAttempt(ctx, job, w.id, w.now())
-	handlerCtx, release := detachedHandlerContext(ctx)
+	_, _ = w.repo.RecordAttempt(recordCtx, job, w.id, w.now())
+	// Derive the handler context from the worker run context so that a
+	// shutdown or leadership-transfer cancellation propagates to in-flight
+	// handlers. They can observe ctx.Done() and return promptly instead of
+	// blocking the stop flow or publishing stale alarms after leadership has
+	// moved to another instance.
+	handlerCtx, release := handlerContext(ctx)
 	defer release()
 	err := handler(handlerCtx, job)
 	if err == nil {
-		_ = w.repo.Finish(ctx, job, "succeeded", nil, w.now())
+		_ = w.repo.Finish(recordCtx, job, "succeeded", nil, w.now())
 		return
 	}
+	// Cancellation (or an expired deadline) is never promoted to a permanent
+	// failure: the job stays retryable so the next leader can re-attempt
+	// delivery, and the attempt record above is preserved.
+	canceled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 	outcome := "retryable"
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		outcome = "retryable"
-	}
-	if job.Attempts+1 >= job.MaxAttempts {
+	if !canceled && job.Attempts+1 >= job.MaxAttempts {
 		outcome = "permanent"
 	}
-	_ = w.repo.Finish(ctx, job, outcome, err, w.now())
+	_ = w.repo.Finish(recordCtx, job, outcome, err, w.now())
 }
 func Backoff(attempt int) time.Duration {
 	if attempt < 1 {
