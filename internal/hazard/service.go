@@ -131,7 +131,7 @@ func (s *Service) IngestObservationBatch(ctx context.Context, actor identity.Act
 		return []BatchObservationResult{{Index: -1, ErrorCode: "batch_too_large", Message: "at most 100 observations are accepted"}}
 	}
 	for index, command := range commands {
-		if err := batchContextError(ctx, index); err != nil {
+		if err := batchContextError(ctx); err != nil {
 			results[index] = BatchObservationResult{Index: index, ErrorCode: "request_cancelled", Message: err.Error()}
 			continue
 		}
