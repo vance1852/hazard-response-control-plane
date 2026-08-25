@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"golang.org/x/crypto/bcrypt"
 	"testing"
 	"time"
@@ -15,6 +16,10 @@ type memoryRepository struct {
 	sessions map[string]Session
 	byDigest map[string]string
 	next     int
+
+	// touchErr, when set, is returned by TouchSession instead of touching the
+	// session, simulating an infrastructure failure on refresh.
+	touchErr error
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -63,6 +68,9 @@ func (r *memoryRepository) FindSessionByDigest(_ context.Context, d []byte) (Ses
 	return s, u, e
 }
 func (r *memoryRepository) TouchSession(_ context.Context, id string, version int64, now time.Time) error {
+	if r.touchErr != nil {
+		return r.touchErr
+	}
 	s := r.sessions[id]
 	if s.Version != version {
 		return apperr.Conflict("session_changed", "changed")
@@ -208,6 +216,38 @@ func TestAuthenticatePropagatesCancellation(t *testing.T) {
 	cancel()
 	if _, err := svc.Authenticate(ctx, "token"); err == nil {
 		t.Fatal("cancelled authentication succeeded")
+	}
+}
+
+func TestAuthenticateRejectsOnSessionRefreshInfrastructureFailure(t *testing.T) {
+	svc, repo, clk := newIdentityService(t)
+	repo.users["commander"] = User{ID: "admin", Username: "commander", PasswordHash: mustHash(t, "StrongPassword123"), DisplayName: "Commander", Role: RoleCommander, Active: true, Version: 1, CreatedAt: clk.Now(), UpdatedAt: clk.Now()}
+	result, _ := svc.Login(context.Background(), "commander", "StrongPassword123")
+	// Crossing the one-minute idle threshold triggers a session refresh.
+	clk.Advance(2 * time.Minute)
+	repo.touchErr = fmt.Errorf("touch session: database is unavailable")
+	actor, err := svc.Authenticate(context.Background(), result.Token)
+	if err == nil {
+		t.Fatalf("refresh failure still authenticated actor=%#v", actor)
+	}
+	if apperr.IsKind(err, apperr.KindConflict) {
+		t.Fatalf("infrastructure error masked as conflict: %v", err)
+	}
+}
+
+func TestAuthenticateToleratesOptimisticConcurrencyConflict(t *testing.T) {
+	svc, repo, clk := newIdentityService(t)
+	repo.users["commander"] = User{ID: "admin", Username: "commander", PasswordHash: mustHash(t, "StrongPassword123"), DisplayName: "Commander", Role: RoleCommander, Active: true, Version: 1, CreatedAt: clk.Now(), UpdatedAt: clk.Now()}
+	result, _ := svc.Login(context.Background(), "commander", "StrongPassword123")
+	clk.Advance(2 * time.Minute)
+	// A concurrent refresh bumps the version first, so this request loses the race.
+	repo.touchErr = apperr.Conflict("session_changed", "session changed concurrently")
+	actor, err := svc.Authenticate(context.Background(), result.Token)
+	if err != nil {
+		t.Fatalf("optimistic conflict rejected access: %v", err)
+	}
+	if actor.UserID != "admin" {
+		t.Fatalf("actor=%#v", actor)
 	}
 }
 
