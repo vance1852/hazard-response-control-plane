@@ -73,7 +73,7 @@ func (s *Service) Complete(ctx context.Context, record Record, code int, body []
 	return nil
 }
 func (s *Service) Fail(ctx context.Context, record Record) error {
-	if err := s.repository.Fail(ctx, failureRecordID(record), s.clock.Now()); err != nil {
+	if err := s.repository.Fail(ctx, record.ID, s.clock.Now()); err != nil {
 		return apperr.Wrap(err, "fail idempotency record")
 	}
 	return nil

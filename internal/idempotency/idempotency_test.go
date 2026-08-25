@@ -136,9 +136,49 @@ func TestFailureReleasesProcessingRecord(t *testing.T) {
 	if err := svc.Fail(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
+	if status := repoRecordByID(repo, record.ID).Status; status != "failed" {
+		t.Fatalf("status=%q want failed", status)
+	}
 	clk.Advance(2 * time.Hour)
 	count, err := repo.Expire(context.Background(), clk.Now(), 10)
 	if err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
+}
+
+// TestFailOnlyReleasesOwnRecord guards against Fail using the caller identity
+// (ActorID) instead of the request record id: when the wrong id is used, the
+// own processing record stays stuck and blocks retries, while a sibling record
+// for the same actor must remain untouched.
+func TestFailOnlyReleasesOwnRecord(t *testing.T) {
+	svc, repo, _ := newIdem(t)
+	actor := identity.Actor{UserID: "u"}
+	own, _, err := svc.Begin(context.Background(), actor, "POST", "/v1", "own", []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, _, err := svc.Begin(context.Background(), actor, "POST", "/v1", "sibling", []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Fail(context.Background(), own); err != nil {
+		t.Fatal(err)
+	}
+
+	if status := repoRecordByID(repo, own.ID).Status; status != "failed" {
+		t.Fatalf("own status=%q want failed", status)
+	}
+	if status := repoRecordByID(repo, sibling.ID).Status; status != "processing" {
+		t.Fatalf("sibling status=%q want processing", status)
+	}
+}
+
+func repoRecordByID(m *memoryIdempotency, id string) Record {
+	for _, r := range m.records {
+		if r.ID == id {
+			return r
+		}
+	}
+	return Record{Status: "missing"}
 }
