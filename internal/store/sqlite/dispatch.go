@@ -347,12 +347,9 @@ func (s *Store) TransitionDeployment(ctx context.Context, id string, version int
 				}
 			}
 		}
-		return nil
+		return appendAudit(ctx, tx, event)
 	})
 	if err != nil {
-		return dispatch.Deployment{}, nil, err
-	}
-	if err := s.appendDeploymentAudit(ctx, event); err != nil {
 		return dispatch.Deployment{}, nil, err
 	}
 	deployment, err := s.FindDeployment(ctx, id)
