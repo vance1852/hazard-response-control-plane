@@ -70,3 +70,67 @@ func TestLoadRejectsEmptyMigration(t *testing.T) {
 		t.Fatal("empty migration accepted")
 	}
 }
+
+// TestApplyBodyFailureIsAtomic verifies that a migration whose SQL body fails
+// leaves neither the structural change nor a ledger row behind, so a retry
+// applies it exactly once.
+func TestApplyBodyFailureIsAtomic(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:migrate-atomic?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// 002 fails: it references a table that does not exist yet.
+	fsys := fstest.MapFS{
+		"001_first.sql":  {Data: []byte("CREATE TABLE one (id INTEGER);")},
+		"002_second.sql": {Data: []byte("CREATE TABLE two (id INTEGER); SELECT * FROM missing_table;")},
+	}
+	migrations, err := Load(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Apply(context.Background(), db, migrations); err == nil {
+		t.Fatal("expected migration failure, got nil")
+	}
+
+	// Ledger must only contain version 1 (1's body succeeded; 2 rolled back fully).
+	var ledgerCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&ledgerCount); err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledgerCount != 1 {
+		t.Fatalf("ledger count=%d, want 1 (atomic ledger + schema)", ledgerCount)
+	}
+
+	// Table "two" must not exist because the whole version-2 transaction rolled back.
+	var name string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='two'`).Scan(&name)
+	if err == nil {
+		t.Fatalf("table two survived failed migration; atomicity broken")
+	}
+
+	// Retry with a corrected migration: now both versions apply exactly once.
+	fsysFixed := fstest.MapFS{
+		"001_first.sql":  {Data: []byte("CREATE TABLE one (id INTEGER);")},
+		"002_second.sql": {Data: []byte("CREATE TABLE two (id INTEGER);")},
+	}
+	migrationsFixed, err := Load(fsysFixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Version 1 is recorded already; the retry must skip it and apply only version 2.
+	if err := Apply(context.Background(), db, migrationsFixed); err != nil {
+		t.Fatalf("retry apply: %v", err)
+	}
+
+	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='two'`).Scan(&name); err != nil {
+		t.Fatalf("table two missing after retry: %v", err)
+	}
+	var versions int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&versions)
+	if versions != 2 {
+		t.Fatalf("ledger versions=%d, want 2 after retry", versions)
+	}
+}

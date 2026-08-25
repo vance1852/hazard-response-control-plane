@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type Migration struct {
@@ -125,24 +124,4 @@ func readApplied(ctx context.Context, db *sql.DB) (map[int]appliedRecord, error)
 		return nil, fmt.Errorf("iterate migration ledger: %w", err)
 	}
 	return result, nil
-}
-
-func applyOne(ctx context.Context, db *sql.DB, migration Migration) error {
-	if err := executeMigrationBody(ctx, db, migration); err != nil {
-		return err
-	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin migration %d: %w", migration.Version, err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES(?, ?, ?, ?)`,
-		migration.Version, migration.Name, migration.Checksum, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		return fmt.Errorf("record migration %d: %w", migration.Version, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration %d: %w", migration.Version, err)
-	}
-	return nil
 }
