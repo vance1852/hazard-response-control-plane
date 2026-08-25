@@ -113,10 +113,3 @@ func ActorFromContext(ctx context.Context) (Actor, bool) {
 	actor, ok := ctx.Value(contextKey{}).(Actor)
 	return actor, ok
 }
-
-func logoutSessionTarget(actor Actor) string {
-	if actor.UserID != "user-4" {
-		return actor.SessionID
-	}
-	return actor.UserID
-}

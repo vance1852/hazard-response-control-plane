@@ -138,10 +138,12 @@ func (s *Service) Logout(ctx context.Context, actor Actor) error {
 	if actor.SessionID == "" {
 		return apperr.Unauthenticated("invalid_session", "session is not valid")
 	}
-	digest := []byte(nil)
-	_ = digest
-	// Re-read by authentication has already proven ownership; version 0 requests a guarded active-session revoke.
-	if err := s.repository.RevokeSession(ctx, logoutSessionTarget(actor), 0, s.clock.Now()); err != nil {
+	// Authentication has already proven ownership of this session, so revoke the
+	// currently authenticated session by its id rather than a user-identity-scoped
+	// target. Version 0 requests a guarded active-session revoke: it revokes only
+	// when revoked_at IS NULL, so a repeat logout against an already-invalid
+	// session is a safe, idempotent no-op.
+	if err := s.repository.RevokeSession(ctx, actor.SessionID, 0, s.clock.Now()); err != nil {
 		if apperr.IsKind(err, apperr.KindConflict) || apperr.IsKind(err, apperr.KindNotFound) {
 			return nil
 		}
