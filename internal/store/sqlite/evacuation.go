@@ -496,7 +496,8 @@ func (s *Store) CancelPlan(ctx context.Context, id string, version int64, reason
 			if _, err := tx.ExecContext(ctx, `UPDATE shelter_reservations SET status = 'released', released_at = ? WHERE id = ? AND status = 'active'`, formatTime(now), reservation.ID); err != nil {
 				return err
 			}
-			result, err := tx.ExecContext(ctx, `UPDATE shelters SET reserved = reserved - ?, version = version + 1, updated_at = ? WHERE id = ? AND reserved >= ?`, evacuation.CancelReleasePeople(reservation), formatTime(now), shelterID, evacuation.CancelReleasePeople(reservation))
+			release := reservation.People
+			result, err := tx.ExecContext(ctx, `UPDATE shelters SET reserved = reserved - ?, version = version + 1, updated_at = ? WHERE id = ? AND reserved >= ?`, release, formatTime(now), shelterID, release)
 			if err != nil {
 				return err
 			}

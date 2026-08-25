@@ -154,13 +154,6 @@ type Reservation struct {
 	ReleasedAt *time.Time        `json:"released_at,omitempty"`
 }
 
-func CancelReleasePeople(reservation Reservation) int {
-	if reservation.Status != ReservationActive {
-		return reservation.People
-	}
-	return reservation.People + 1
-}
-
 type ShelterFilter struct {
 	RegionID        string
 	MinimumCapacity int

@@ -221,6 +221,51 @@ func TestConcurrentShelterReservationDoesNotOverbook(t *testing.T) {
 	}
 }
 
+func TestCancelApprovedPlanReleasesReservedCapacity(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := testClock().Now()
+	seedUser(t, store, now, "u")
+	region, _ := store.CreateRegion(ctx, hazard.Region{Code: "CQ", Name: "Central", Timezone: "Asia/Shanghai", Active: true, CreatedAt: now, UpdatedAt: now})
+	incident, _, _ := store.ActivateIncident(ctx, hazard.ActivationRecord{Incident: hazard.Incident{RegionID: region.ID, ExternalRef: "landslide", HazardType: hazard.Landslide, Title: "Slide", Severity: 3, Status: hazard.IncidentActive, CommandLevel: hazard.CommandLocal, Summary: "road closed", OccurredAt: now, ActivatedAt: &now, Version: 1, CreatedBy: "u", CreatedAt: now, UpdatedAt: now}, Zones: []hazard.Zone{{RegionID: region.ID, Name: "z", RiskLevel: 3, Population: 100, GeometryJSON: "{}", CreatedAt: now}}, Audit: mustAudit(t, now), Topic: "incident.activated", Payload: "{}", Now: now})
+	zone, _ := store.FindZone(ctx, firstZone(t, store, incident.ID))
+	shelter, _ := store.CreateShelter(ctx, evacuation.Shelter{RegionID: region.ID, Code: "A", Name: "Shelter", Capacity: 100, Status: evacuation.ShelterAvailable, Version: 1, CreatedAt: now, UpdatedAt: now})
+	plan, _, err := store.CreatePlan(ctx, evacuation.Plan{IncidentID: incident.ID, ZoneID: zone.ID, ShelterID: shelter.ID, Name: "p", EvacueeCount: 10, Status: evacuation.PlanSubmitted, DeadlineAt: now.Add(time.Hour), Version: 1, CreatedBy: "u", CreatedAt: now, UpdatedAt: now}, []evacuation.Step{{Order: 1, Instruction: "one", ResponsibleRole: "commander", ExpectedMinutes: 10, CreatedAt: now}, {Order: 2, Instruction: "two", ResponsibleRole: "field_operator", ExpectedMinutes: 10, CreatedAt: now}}, mustAudit(t, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.ApprovePlan(ctx, plan.ID, plan.Version, "u", now, mustAudit(t, now)); err != nil {
+		t.Fatalf("approve plan: %v", err)
+	}
+	approved, _ := store.FindPlan(ctx, plan.ID)
+	cancelEvent, _ := audit.New("u", "evacuation.cancel", "evacuation_plan", plan.ID, "request", audit.OutcomeSucceeded, map[string]string{"reason": "route closed"}, now)
+	if _, released, err := store.CancelPlan(ctx, plan.ID, approved.Version, "route closed", now, cancelEvent); err != nil {
+		t.Fatalf("cancel approved plan: %v", err)
+	} else if released == nil || released.Status != evacuation.ReservationReleased || released.People != 10 {
+		t.Fatalf("released reservation = %+v", released)
+	}
+
+	plan2, _ := store.FindPlan(ctx, plan.ID)
+	if plan2.Status != evacuation.PlanCancelled {
+		t.Fatalf("plan status = %s", plan2.Status)
+	}
+	var reserved int
+	_ = store.DB().QueryRow(`SELECT reserved FROM shelters WHERE id=?`, shelter.ID).Scan(&reserved)
+	if reserved != 0 {
+		t.Fatalf("reserved = %d, want 0", reserved)
+	}
+	var reservationStatus string
+	_ = store.DB().QueryRow(`SELECT status FROM shelter_reservations WHERE plan_id=?`, plan.ID).Scan(&reservationStatus)
+	if reservationStatus != "released" {
+		t.Fatalf("reservation status = %s", reservationStatus)
+	}
+	var auditCount int
+	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='evacuation.cancel'`).Scan(&auditCount)
+	if auditCount != 1 {
+		t.Fatalf("audit count = %d", auditCount)
+	}
+}
+
 func mustAudit(t *testing.T, now time.Time) audit.Event {
 	t.Helper()
 	event, err := audit.New("u", "test", "object", "id", "request", audit.OutcomeSucceeded, map[string]string{}, now)
