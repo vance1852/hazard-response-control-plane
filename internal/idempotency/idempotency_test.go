@@ -142,3 +142,41 @@ func TestFailureReleasesProcessingRecord(t *testing.T) {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
 }
+
+type failingCompleteRepo struct{ memoryIdempotency }
+
+func (f *failingCompleteRepo) Complete(ctx context.Context, id string, code int, body []byte, now time.Time) error {
+	return apperr.Unavailable("store_unavailable", "response replay could not be persisted")
+}
+
+// TestCompleteSurfacesPersistenceFailure guards the regression where a failing
+// response replay was swallowed and the record was left in an unreplayable
+// "processing" state, so retries could not tell whether to create the resource.
+func TestCompleteSurfacesPersistenceFailure(t *testing.T) {
+	repo := &failingCompleteRepo{memoryIdempotency{records: map[string]Record{}}}
+	clk := clock.NewManual(time.Date(2026, 8, 24, 8, 0, 0, 0, time.UTC))
+	svc, err := NewService(repo, clk, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := identity.Actor{UserID: "u"}
+	hash, _ := HashBody(map[string]string{"x": "y"})
+	record, _, err := svc.Begin(context.Background(), actor, "POST", "/v1/deployments", "key", hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(context.Background(), record, 201, []byte("{}")); err == nil {
+		t.Fatal("expected complete to surface the response replay persistence failure, got nil")
+	}
+	// The record must remain a replayable "processing" record with no cached
+	// response so the next attempt can re-run the operation rather than treat it
+	// as reliably completed.
+	key := actor.UserID + "|" + "POST" + "|" + "/v1/deployments" + "|" + "key"
+	stored, ok := repo.records[key]
+	if !ok {
+		t.Fatal("record missing")
+	}
+	if stored.Status != "processing" || stored.ResponseCode != 0 || stored.ResponseBody != nil {
+		t.Fatalf("record=%#v want processing with no cached response", stored)
+	}
+}
