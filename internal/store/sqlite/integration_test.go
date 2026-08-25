@@ -135,6 +135,54 @@ func TestActivationTransactionPersistsIncidentZonesAuditAndOutbox(t *testing.T) 
 	}
 }
 
+func TestActivationRollsBackWhenOutboxWriteFails(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := testClock().Now()
+	seedUser(t, store, now, "user")
+	region, _ := store.CreateRegion(ctx, hazard.Region{Code: "CQ", Name: "Central", Timezone: "Asia/Shanghai", Active: true, CreatedAt: now, UpdatedAt: now})
+	if _, err := store.DB().ExecContext(ctx, `DROP TABLE outbox_events`); err != nil {
+		t.Fatal(err)
+	}
+	event, _ := audit.New("user", "incident.activate", "incident", "rainstorm-1", "request", audit.OutcomeSucceeded, nil, now)
+	record := hazard.ActivationRecord{Incident: hazard.Incident{RegionID: region.ID, ExternalRef: "rainstorm-1", HazardType: hazard.Rainstorm, Title: "Rain", Severity: 3, Status: hazard.IncidentActive, CommandLevel: hazard.CommandLocal, Summary: "rain", OccurredAt: now, ActivatedAt: &now, Version: 1, CreatedBy: "user", CreatedAt: now, UpdatedAt: now}, Zones: []hazard.Zone{{RegionID: region.ID, Name: "flood", RiskLevel: 3, Population: 100, GeometryJSON: "{}", CreatedAt: now}}, Audit: event, Topic: "incident.activated", Payload: "{}", Now: now}
+	if _, _, err := store.ActivateIncident(ctx, record); err == nil {
+		t.Fatal("activation succeeded despite outbox write failure")
+	}
+	var incidents, zones, audits int
+	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM incidents WHERE external_ref='rainstorm-1'`).Scan(&incidents)
+	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM incident_zones`).Scan(&zones)
+	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM audit_events`).Scan(&audits)
+	if incidents != 0 || zones != 0 || audits != 0 {
+		t.Fatalf("aggregate not rolled back: incidents=%d zones=%d audits=%d", incidents, zones, audits)
+	}
+	if _, err := store.DB().ExecContext(ctx, `CREATE TABLE outbox_events (
+    id TEXT PRIMARY KEY,
+    topic TEXT NOT NULL,
+    aggregate_type TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'publishing', 'published', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_until TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    published_at TEXT
+)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ActivateIncident(ctx, record); err != nil {
+		t.Fatalf("retry with same external_ref failed: %v", err)
+	}
+	var outboxCount int
+	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM outbox_events`).Scan(&outboxCount)
+	if outboxCount != 1 {
+		t.Fatalf("outbox published %d times, want exactly 1", outboxCount)
+	}
+}
+
 func TestActivationRollbackOnInvalidZone(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

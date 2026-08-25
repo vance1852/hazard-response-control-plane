@@ -209,12 +209,12 @@ func (s *Store) ActivateIncident(ctx context.Context, record hazard.ActivationRe
 		if err := appendAudit(ctx, tx, record.Audit); err != nil {
 			return err
 		}
+		if err := appendActivationOutbox(ctx, tx, outboxID, incident.ID, record); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
-		return hazard.Incident{}, nil, err
-	}
-	if err := s.appendActivationOutbox(ctx, outboxID, incident.ID, record); err != nil {
 		return hazard.Incident{}, nil, err
 	}
 	return incident, zones, nil
