@@ -73,15 +73,9 @@ func (w *Worker) execute(ctx context.Context, job Job) {
 		return
 	}
 	_, _ = w.repo.RecordAttempt(ctx, job, w.id, w.now())
-	finishedEarly, finishErr := w.acknowledgeBeforeHandler(ctx, job)
-	if finishErr != nil {
-		return
-	}
 	err := handler(ctx, job)
 	if err == nil {
-		if !finishedEarly {
-			_ = w.repo.Finish(ctx, job, "succeeded", nil, w.now())
-		}
+		_ = w.repo.Finish(ctx, job, "succeeded", nil, w.now())
 		return
 	}
 	outcome := "retryable"
