@@ -120,8 +120,15 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
-	if err := s.deps.Health.Ping(readinessContext(r.Context())); err != nil {
-		writeError(w, audit.RequestID(r.Context()), apperr.Unavailable("database_unready", "database is not ready"))
+	ctx := r.Context()
+	if err := s.deps.Health.Ping(ctx); err != nil {
+		writeError(w, audit.RequestID(ctx), apperr.Unavailable("database_unready", "database is not ready"))
+		return
+	}
+	// A probe whose request was canceled must never report ready, even if the
+	// store happened to answer before the cancellation was observed.
+	if ctx.Err() != nil {
+		writeError(w, audit.RequestID(ctx), apperr.Unavailable("database_unready", "database is not ready"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ready"})
