@@ -211,6 +211,34 @@ func TestAuthenticatePropagatesCancellation(t *testing.T) {
 	}
 }
 
+// failingCreateSessionRepository delegates to an inner repository but fails
+// CreateSession, simulating a persistence failure under database contention
+// (for example a token_digest collision when the session row is never inserted).
+type failingCreateSessionRepository struct {
+	Repository
+	createSessionErr error
+}
+
+func (r *failingCreateSessionRepository) CreateSession(ctx context.Context, s Session) (Session, error) {
+	return Session{}, r.createSessionErr
+}
+
+func TestLoginAbortsTokenWhenSessionPersistenceFails(t *testing.T) {
+	svc, repo, clk := newIdentityService(t)
+	repo.users["commander"] = User{ID: "admin", Username: "commander", PasswordHash: mustHash(t, "StrongPassword123"), DisplayName: "Commander", Role: RoleCommander, Active: true, Version: 1, CreatedAt: clk.Now(), UpdatedAt: clk.Now()}
+	svc.repository = &failingCreateSessionRepository{Repository: repo, createSessionErr: apperr.Conflict("session_exists", "session token already exists")}
+	result, err := svc.Login(context.Background(), "commander", "StrongPassword123")
+	if err == nil {
+		t.Fatalf("login succeeded despite persistence failure: %#v", result)
+	}
+	if result.Token != "" {
+		t.Fatalf("token issued despite persistence failure: %q", result.Token)
+	}
+	if !apperr.IsKind(err, apperr.KindConflict) {
+		t.Fatalf("error kind=%v", err)
+	}
+}
+
 func mustHash(t *testing.T, password string) string {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
