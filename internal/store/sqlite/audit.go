@@ -37,6 +37,9 @@ func appendAudit(ctx context.Context, query Querier, event audit.Event) error {
 }
 
 func (s *Store) Search(ctx context.Context, filter audit.Filter) (audit.Page, error) {
+	if err := ctx.Err(); err != nil {
+		return audit.Page{}, fmt.Errorf("query audit events: %w", err)
+	}
 	if filter.Limit == 0 {
 		filter.Limit = 50
 	}
@@ -101,9 +104,15 @@ func (s *Store) Search(ctx context.Context, filter audit.Filter) (audit.Page, er
 			return audit.Page{}, err
 		}
 		events = append(events, event)
+		if err := ctx.Err(); err != nil {
+			return audit.Page{}, fmt.Errorf("iterate audit events: %w", err)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return audit.Page{}, fmt.Errorf("iterate audit events: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return audit.Page{}, fmt.Errorf("query audit events: %w", err)
 	}
 	page := audit.Page{Events: events}
 	if len(events) > filter.Limit {

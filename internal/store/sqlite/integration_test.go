@@ -267,6 +267,22 @@ func TestAuditCursorRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAuditSearchCancelPropagatesToPersistence confirms a cancelled request
+// surfaces as a context error at the store boundary rather than a successful
+// empty page, so abandoned exports cannot be mistaken for empty results.
+func TestAuditSearchCancelPropagatesToPersistence(t *testing.T) {
+	store := openTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	page, err := store.Search(ctx, audit.Filter{Limit: 10})
+	if err == nil {
+		t.Fatalf("cancelled search returned success page=%v", page)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
 func TestStoreWithinTxHonorsCancellation(t *testing.T) {
 	store := openTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
